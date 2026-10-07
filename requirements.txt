@@ -1,0 +1,4 @@
+tkinterdnd2    # drag and drop of photos onto the window (GUI works without it, minus drag and drop)
+openpyxl       # placeholder Excel export in backend.py
+pillow         # barcode preview picture + placeholder barcode PDF in backend.py
+pyinstaller    # only needed to build the .exe
