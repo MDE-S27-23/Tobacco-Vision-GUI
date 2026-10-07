@@ -1,0 +1,56 @@
+# Builds the Windows .exe on GitHub and attaches it to the release of a tag.
+#
+# To publish a version:   git tag 0.0.2   then   git push origin 0.0.2
+# A few minutes later the release for that tag has TobaccoVisionGUI-0.0.2.exe.
+
+name: Build exe
+
+on:
+  push:
+    tags: ["*"]          # any tag, e.g. 0.0.2
+  workflow_dispatch:      # "Run workflow" button on the Actions tab (test build)
+
+permissions:
+  contents: write         # needed to create a release and upload to it
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: python -m pip install -r requirements.txt
+
+      # Same command as build_exe.bat (the .bat itself ends in "pause",
+      # which would hang here).
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name TobaccoVisionGUI --collect-all tkinterdnd2 main.py
+
+      # Test builds (no tag): the exe is downloadable from the run's page.
+      - name: Keep the exe from a test build
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TobaccoVisionGUI-test-build
+          path: dist/TobaccoVisionGUI.exe
+
+      # Tag builds: put the exe on the release, creating the release if needed.
+      - name: Attach to the release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          exe="dist/TobaccoVisionGUI-$TAG.exe"
+          mv dist/TobaccoVisionGUI.exe "$exe"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$exe" --clobber
+          else
+            gh release create "$TAG" "$exe" --title "$TAG" --generate-notes
+          fi
