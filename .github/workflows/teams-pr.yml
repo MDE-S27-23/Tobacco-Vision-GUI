@@ -1,0 +1,61 @@
+# Posts a card to Microsoft Teams when a pull request is opened, reopened, merged, or closed
+
+name: Teams pull request alerts
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the pull request to Teams
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          ACTION: ${{ github.event.action }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          FROM_BRANCH: ${{ github.event.pull_request.head.ref }}
+          INTO_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # Pull requests from forks can't read the secret, so there is nothing to send.
+          if [ -z "$TEAMS_WEBHOOK_URL" ]; then
+            echo "TEAMS_WEBHOOK_URL is not available to this run; skipping."
+            exit 0
+          fi
+
+          if [ "$ACTION" = "closed" ] && [ "$MERGED" = "true" ]; then
+            what="merged"
+          else
+            what="$ACTION"
+          fi
+
+          payload=$(jq -n \
+            --arg title "Pull request $what: #$NUMBER $PR_TITLE" \
+            --arg detail "By $AUTHOR, $FROM_BRANCH into $INTO_BRANCH" \
+            --arg url "$PR_URL" \
+            '{
+              type: "message",
+              attachments: [{
+                contentType: "application/vnd.microsoft.card.adaptive",
+                content: {
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  type: "AdaptiveCard",
+                  version: "1.4",
+                  body: [
+                    { type: "TextBlock", text: $title, weight: "Bolder", size: "Medium", wrap: true },
+                    { type: "TextBlock", text: $detail, isSubtle: true, wrap: true }
+                  ],
+                  actions: [
+                    { type: "Action.OpenUrl", title: "View pull request", url: $url }
+                  ]
+                }
+              }]
+            }')
+          curl --fail-with-body -sS -H "Content-Type: application/json" -d "$payload" "$TEAMS_WEBHOOK_URL"
