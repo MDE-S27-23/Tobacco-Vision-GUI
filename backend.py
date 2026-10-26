@@ -5,7 +5,7 @@ Currently this is the ONLY file the GUI calls into.
     start_batch()                             -> Tab 1, once before a run
     process_image(image_path)                 -> Tab 1, once per photo
     export_results_to_excel(results, path)    -> Tab 1, "Save Excel file"
-    make_barcode_text(plant, year, month, n)  -> Tab 2, text inside a barcode
+    make_barcode_text(lot, year, month, n)    -> Tab 2, text inside a barcode
     render_page_preview(barcode_texts)        -> Tab 2, optional preview picture
     export_barcodes(barcode_texts, path)      -> Tab 2, "Save barcodes"
 
@@ -17,23 +17,16 @@ import time
 
 # Tab 2
 
-# Name shown in the dropdown
-PLANT_CODES = {
-    "Tobacco": "TOB",
-    "Basil": "BAS",
-    "Dill": "DIL",
-}
-
 BARCODE_NUMBER_DIGITS = 4   # numbers are zero-padded
 
 # File type offered by the "Save barcodes" dialog.
 BARCODE_FILE_EXTENSION = ".pdf"
 BARCODE_FILE_DESCRIPTION = "PDF document"
 
-def make_barcode_text(plant, year, month, number):
+def make_barcode_text(lot_number, year, month, number):
     """Return the text encoded in one barcode"""
     return "%s-%04d-%02d-%0*d" % (
-        PLANT_CODES[plant],
+        lot_number,
         year,
         month,
         BARCODE_NUMBER_DIGITS,

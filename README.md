@@ -19,7 +19,7 @@ Run `build_exe.bat`. The output should be in
 | `main.py` | Entry point |
 | `gui_app.py` | Main window, the two tabs, the Debug checkbox |
 | `tab_process.py` | Tab 1: photo list (drag and drop), progress bar, save Excel |
-| `tab_barcode.py` | Tab 2: notes, plant/year/month/number form, page preview, save |
+| `tab_barcode.py` | Tab 2: notes, lot number/year/month/number form, page preview, save |
 | `debug_panel.py` | Debug window with a button for every GUI state |
 | `ui_helpers.py` | Small shared widgets |
 | `backend.py` | **Placeholders** |

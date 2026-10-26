@@ -43,8 +43,8 @@ class App:
         self.notebook.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.process_tab = ProcessTab(self.notebook, self)
         self.barcode_tab = BarcodeTab(self.notebook, self)
-        self.notebook.add(self.process_tab, text="  Process tray photos  ")
-        self.notebook.add(self.barcode_tab, text="  Make barcodes  ")
+        self.notebook.add(self.process_tab, text="  Image processing  ")
+        self.notebook.add(self.barcode_tab, text="  Barcode generator  ")
 
         bottom = ttk.Frame(self.root)
         bottom.pack(fill="x", padx=8, pady=4)

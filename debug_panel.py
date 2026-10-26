@@ -14,6 +14,7 @@ from ui_helpers import show_save_error
 FAKE_FOLDER = os.path.join("C:\\", "Users", "Customer", "Documents")
 FAKE_FAILURE = "No tray was found in the photo."
 FAKE_DUPLICATE = "duplicate barcode (same as %s)"
+FAKE_LOT_NUMBER = "L1042"
 
 
 class DebugPanel(tk.Toplevel):
@@ -28,7 +29,7 @@ class DebugPanel(tk.Toplevel):
         body.pack(fill="both", expand=True)
 
         # Tab 1
-        tab1 = ttk.LabelFrame(body, text='Tab 1 - "Process tray photos"', padding=8)
+        tab1 = ttk.LabelFrame(body, text='Tab 1 - "Image processing"', padding=8)
         tab1.pack(fill="x")
         self._buttons(
             tab1,
@@ -80,7 +81,7 @@ class DebugPanel(tk.Toplevel):
         ).pack(fill="x", pady=(6, 0))
 
         # Tab 2
-        tab2 = ttk.LabelFrame(body, text='Tab 2 - "Make barcodes"', padding=8)
+        tab2 = ttk.LabelFrame(body, text='Tab 2 - "Barcode generator"', padding=8)
         tab2.pack(fill="x", pady=(10, 0))
         self._buttons(
             tab2,
@@ -246,6 +247,8 @@ class DebugPanel(tk.Toplevel):
 
     def t2_fill(self, text):
         tab = self._tab2()
+        if not tab.lot_var.get().strip():
+            tab.lot_var.set(FAKE_LOT_NUMBER)
         tab.numbers_var.set(text)
         return tab
 
@@ -284,7 +287,7 @@ class DebugPanel(tk.Toplevel):
 
         tab = self._tab2()
         if not tab.barcode_texts:
-            tab.numbers_var.set("1-20")
+            self.t2_fill("1-20")
         if tab._preview_job is not None:  # skip the typing delay
             tab.after_cancel(tab._preview_job)
         tab._refresh_preview()

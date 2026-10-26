@@ -1,4 +1,4 @@
-"""Tab 2. choose plant / year / month / barcode numbers and save barcodes"""
+"""Tab 2. type lot number, choose year / month / barcode numbers and save barcodes"""
 
 import datetime
 import random
@@ -21,7 +21,7 @@ WARNING_TEXT = (
     "This program does NOT keep track of the barcodes you have already made."
 )
 HOW_TO_STEPS = [
-    "Choose the plant, the year and the month.",
+    "Type the lot number, then choose the year and the month.",
     "Type the barcode number, or a range such as 1-30 to make many at once.",
     'Click "Save barcodes...", then open the saved file and print it.',
     "Write down the numbers you printed, so you know where to continue next time.",
@@ -31,15 +31,27 @@ HOW_TO_STEPS = [
 NOTES_WRAP = 660    # The notes span the whole tab
 LEFT_WRAP = 370     # Texts under the form
 
-HINT_EMPTY = "Type the barcode number(s) above to continue."
+ERROR_NO_NUMBERS = "Missing barcode number."
 ERROR_FORMAT = "Please type a number like 7, or a range like 1-20."
 ERROR_RANGE = "Barcode numbers must be between 1 and %d." % MAX_BARCODE_NUMBER
+ERROR_NO_LOT = "Missing lot number."
+ERROR_LOT = "The lot number can only use letters, digits, '-', '_' and '.'."
 ERROR_COLOR = "#b00020"
 
 PREVIEW_MIN_LINES = 12  # Smallest height of the page preview
 
 _SINGLE = re.compile(r"^\d+$")
 _RANGE = re.compile(r"^(\d+)\s*(?:-|–|—|to)\s*(\d+)$", re.IGNORECASE)
+_LOT = re.compile(r"^[A-Za-z0-9._-]+$")  # also ends up in the file name
+
+
+def check_lot_number(text):
+    """Raise ValueError if `text` can't be used as a lot number"""
+
+    if not text:
+        raise ValueError(ERROR_NO_LOT)
+    if not _LOT.match(text):
+        raise ValueError(ERROR_LOT)
 
 
 def parse_barcode_numbers(text):
@@ -48,7 +60,7 @@ def parse_barcode_numbers(text):
     parts = [part.strip() for part in re.split(r"[,;]", text)]
     parts = [part for part in parts if part]
     if not parts:
-        raise ValueError(HINT_EMPTY)
+        raise ValueError(ERROR_NO_NUMBERS)
 
     numbers = set()
     for part in parts:
@@ -128,7 +140,7 @@ class BarcodeTab(ttk.Frame):
         form.columnconfigure(1, weight=1)
 
         today = datetime.date.today()
-        self.plant_var = tk.StringVar(value=list(backend.PLANT_CODES)[0])
+        self.lot_var = tk.StringVar()
         self.year_var = tk.StringVar(value=str(today.year))
         self.month_var = tk.StringVar()
         self.numbers_var = tk.StringVar()
@@ -143,11 +155,8 @@ class BarcodeTab(ttk.Frame):
             )
             widget.grid(row=row, column=1, sticky="ew", pady=3)
 
-        self.plant_box = ttk.Combobox(
-            form, textvariable=self.plant_var, state="readonly", width=18,
-            values=list(backend.PLANT_CODES),
-        )
-        add_row(0, "Plant:", self.plant_box)
+        self.lot_entry = ttk.Entry(form, textvariable=self.lot_var, width=20)
+        add_row(0, "Lot number:", self.lot_entry)
         self.year_box = ttk.Combobox(
             form, textvariable=self.year_var, state="readonly", width=18,
             values=year_values,
@@ -196,31 +205,35 @@ class BarcodeTab(ttk.Frame):
             row=1, column=0, pady=(4, 0)
         )
 
-        for variable in (self.plant_var, self.year_var, self.month_var, self.numbers_var):
+        for variable in (self.lot_var, self.year_var, self.month_var, self.numbers_var):
             variable.trace_add("write", self._on_input_changed)
-        self.numbers_entry.bind("<Return>", lambda event: self.save_button.invoke())
+        for entry in (self.lot_entry, self.numbers_entry):
+            entry.bind("<Return>", lambda event: self.save_button.invoke())
 
     # Reacting to input
 
     def _on_input_changed(self, *_):
         """Re-check the form. update the summary, the button and the preview"""
         self.save_bar.clear()
-        typed = self.numbers_var.get()
+        lot_number = self.lot_var.get().strip()
+        errors = []  # one line per problem, in form order
         try:
-            numbers = parse_barcode_numbers(typed)
+            check_lot_number(lot_number)
         except ValueError as error:
+            errors.append(str(error))
+        try:
+            numbers = parse_barcode_numbers(self.numbers_var.get())
+        except ValueError as error:
+            errors.append(str(error))
+
+        if errors:
             self.barcode_texts = []
-            is_hint = not typed.strip()
-            self.summary_label.configure(
-                text=str(error),
-                foreground=self._normal_color if is_hint else ERROR_COLOR,
-            )
+            self.summary_label.configure(text="\n".join(errors), foreground=ERROR_COLOR)
         else:
-            plant = self.plant_var.get()
             year = int(self.year_var.get())
             month = self.month_box.current() + 1
             self.barcode_texts = [
-                backend.make_barcode_text(plant, year, month, number)
+                backend.make_barcode_text(lot_number, year, month, number)
                 for number in numbers
             ]
             pages = backend.split_into_pages(self.barcode_texts)
@@ -414,7 +427,7 @@ class BarcodeTab(ttk.Frame):
 
     def reset(self):
         today = datetime.date.today()
-        self.plant_box.current(0)
+        self.lot_var.set("")
         self.year_var.set(str(today.year))
         self.month_box.current(today.month - 1)
         self.numbers_var.set("")
