@@ -2,7 +2,6 @@
 Opened with the "Debug" checkbox in the bottom-right corner of the main window"""
 
 import os
-import random
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -15,6 +14,7 @@ FAKE_FOLDER = os.path.join("C:\\", "Users", "Customer", "Documents")
 FAKE_FAILURE = "No tray was found in the photo."
 FAKE_DUPLICATE = "duplicate barcode (same as %s)"
 FAKE_LOT_NUMBER = "L1042"
+FAKE_PREVIEW_FAILURE = "The barcode font could not be loaded."
 
 
 class DebugPanel(tk.Toplevel):
@@ -92,7 +92,9 @@ class DebugPanel(tk.Toplevel):
                 ("List with gaps: 1-5, 9, 12-14", lambda: self.t2_fill("1-5, 9, 12-14")),
                 ("Invalid input: abc", lambda: self.t2_fill("abc")),
                 ("Out of range: 0-20000", lambda: self.t2_fill("0-20000")),
-                ("Sample preview picture", self.t2_sample_preview),
+                ("Many pages: 1-500", lambda: self.t2_fill("1-500")),
+                ("Slow preview (2 s per page)", self.t2_slow_preview),
+                ("Preview failed", self.t2_preview_failed),
                 ("After barcodes saved", self.t2_saved),
                 ("Message: save failed", self.t2_save_error),
             ],
@@ -243,55 +245,34 @@ class DebugPanel(tk.Toplevel):
         return self.app.barcode_tab
 
     def t2_reset(self):
-        self._tab2().reset()
+        tab = self._tab2()
+        tab.preview_fn = None
+        tab.reset()
 
     def t2_fill(self, text):
         tab = self._tab2()
+        tab.preview_fn = None
         if not tab.lot_var.get().strip():
             tab.lot_var.set(FAKE_LOT_NUMBER)
         tab.numbers_var.set(text)
         return tab
 
-    def t2_sample_preview(self):
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-        except ImportError:
-            messagebox.showwarning(
-                "Debug",
-                "The sample picture needs Pillow.\n\nInstall it with:  pip install pillow",
-                parent=self,
-            )
-            return
-        # A page-shaped picture, as backend.render_page_preview would
-        dpi = 100
-        image = Image.new(
-            "RGB",
-            (round(backend.PAGE_WIDTH_IN * dpi), round(backend.PAGE_HEIGHT_IN * dpi)),
-            "white",
-        )
-        draw = ImageDraw.Draw(image)
-        rng = random.Random(128)
-        for x, y, width, height in backend.pair_slots()[:6]:
-            left, right = x * dpi + 30, (x + width) * dpi - 30
-            top, bottom = y * dpi + 8, (y + height) * dpi - 8
-            bar_x = left
-            while bar_x < right:
-                bar = rng.choice((2, 2, 4, 6))
-                draw.rectangle([bar_x, top, bar_x + bar - 1, bottom], fill="black")
-                bar_x += bar + rng.choice((2, 4, 6))
-        try:
-            font = ImageFont.load_default(size=40)
-        except TypeError:  # older Pillow: small built-in font only
-            font = ImageFont.load_default()
-        draw.text((120, 700), "SAMPLE PICTURE\nfrom the backend", fill="black", font=font)
+    def t2_slow_preview(self):
+        def slow_render(request, page_index):
+            time.sleep(2)
+            return backend.render_preview(request, page_index)
 
-        tab = self._tab2()
-        if not tab.barcode_texts:
-            self.t2_fill("1-20")
-        if tab._preview_job is not None:  # skip the typing delay
-            tab.after_cancel(tab._preview_job)
-        tab._refresh_preview()
-        tab.show_preview_image(image)
+        tab = self.t2_fill("1-500")
+        tab.preview_fn = slow_render  # stays until another Tab 2 button is clicked
+        tab.refresh_preview()
+
+    def t2_preview_failed(self):
+        def failing_render(request, page_index):
+            raise RuntimeError(FAKE_PREVIEW_FAILURE)
+
+        tab = self.t2_fill("1-20")
+        tab.preview_fn = failing_render
+        tab.refresh_preview()
 
     def t2_saved(self):
         tab = self.t2_fill("1-20")

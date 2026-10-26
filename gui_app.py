@@ -121,6 +121,11 @@ class App:
                 "Still working",
                 "Photos are still being processed.\n\nClose the program anyway?",
             )
+        elif self.barcode_tab.is_saving():
+            question = (
+                "Still saving",
+                "The barcode file is still being saved.\n\nClose the program anyway?",
+            )
         elif self.process_tab.has_unsaved_results():
             question = (
                 "Results not saved",

@@ -127,6 +127,11 @@ class SaveBar(ttk.Frame):
         self._label.configure(text="Saved to:  %s" % path)
         self._after_save.grid()
 
+    def show_busy(self, text):
+        self._path = None
+        self._label.configure(text=text)
+        self._after_save.grid_remove()
+
     def clear(self):
         self._path = None
         self._label.configure(text="")

@@ -1,21 +1,27 @@
-"""Tab 2. type lot number, choose year / month / barcode numbers and save barcodes"""
+"""Tab 2. type lot number, choose year / month / barcode numbers and save barcodes
+
+This tab decides WHICH barcodes to make. backend.py decides how they look and where they go
+"""
 
 import datetime
-import random
+import io
+import queue
 import re
+import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, ttk
 
 import backend
-from ui_helpers import SaveBar, WrappingLabel, busy_cursor, show_save_error
+from ui_helpers import SaveBar, WrappingLabel, show_save_error
 
 MONTHS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
 
-MAX_BARCODE_NUMBER = 10 ** backend.BARCODE_NUMBER_DIGITS - 1  # 9999
+BARCODE_NUMBER_DIGITS = 4   # numbers are zero-padded
+MAX_BARCODE_NUMBER = 10 ** BARCODE_NUMBER_DIGITS - 1  # 9999
 
 WARNING_TEXT = (
     "This program does NOT keep track of the barcodes you have already made."
@@ -32,17 +38,34 @@ NOTES_WRAP = 660    # The notes span the whole tab
 LEFT_WRAP = 370     # Texts under the form
 
 ERROR_NO_NUMBERS = "Missing barcode number."
-ERROR_FORMAT = "Please type a number like 7, or a range like 1-20."
+ERROR_FORMAT = "Barcode number: please type a number like 7, or a range like 1-20."
 ERROR_RANGE = "Barcode numbers must be between 1 and %d." % MAX_BARCODE_NUMBER
 ERROR_NO_LOT = "Missing lot number."
 ERROR_LOT = "The lot number can only use letters, digits, '-', '_' and '.'."
 ERROR_COLOR = "#b00020"
+HINT_COLOR = "#606060"
 
-PREVIEW_MIN_LINES = 12  # Smallest height of the page preview
+PREVIEW_EMPTY = "The barcode pages will show up here."
+PREVIEW_NONE = "No preview available."
+PREVIEW_MIN_LINES = 12      # Smallest height of the page preview
+PREVIEW_START_ASPECT = 8.5 / 11  # starting shape only, the real shape comes from the PNG
+PREVIEW_DELAY_MS = 150      # wait until typing pauses
+POLL_MS = 30
 
 _SINGLE = re.compile(r"^\d+$")
 _RANGE = re.compile(r"^(\d+)\s*(?:-|–|—|to)\s*(\d+)$", re.IGNORECASE)
 _LOT = re.compile(r"^[A-Za-z0-9._-]+$")  # also ends up in the file name
+
+
+def make_barcode_text(lot_number, year, month, number):
+    """Return the text encoded in one barcode"""
+    return "%s-%04d-%02d-%0*d" % (lot_number, year, month, BARCODE_NUMBER_DIGITS, number)
+
+
+def build_request(barcode_texts):
+    """The request handed to every Tab 2 backend function"""
+    # One dict per barcode to leave room for more fields later
+    return {"barcodes": [{"text": text} for text in barcode_texts]}
 
 
 def check_lot_number(text):
@@ -81,19 +104,31 @@ def _plural(count, word):
     return "%d %s%s" % (count, word, "" if count == 1 else "s")
 
 
+def _error_text(error):
+    return str(error) or error.__class__.__name__
+
+
 class BarcodeTab(ttk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent, padding=10)
         self.app = app
         self.barcode_texts = []  # what "Save barcodes..." will write
+        self.request = None      # build_request(barcode_texts), None while the form has errors
+        self.page_count = 0
+        self.page_index = 0      # page shown in the preview
+        self.preview_fn = None   # None uses backend.render_preview, the debug panel swaps in fakes
 
-        self._preview_pairs = []
         self._preview_image = None
-        self._preview_error = ""
+        self._preview_message = ""
+        self._preview_message_color = HINT_COLOR
         self._preview_photo = None  # keep a reference or Tk drops the image
+        self._preview_gen = 0       # bumped on every change to drop outdated renders
+        self._preview_busy = False
         self._preview_job = None
         self._redraw_job = None
-        self._fonts = {}
+        self._saving_path = None
+        self._results = queue.Queue()  # (kind, gen, result, error) from the worker threads
+        self._poll_job = None
 
         self._build()
         self._on_input_changed()
@@ -193,17 +228,21 @@ class BarcodeTab(ttk.Frame):
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(0, weight=1)
         min_height = PREVIEW_MIN_LINES * line_height
-        min_width = round(min_height * backend.PAGE_WIDTH_IN / backend.PAGE_HEIGHT_IN)
         self.preview_canvas = tk.Canvas(
-            preview, width=min_width, height=min_height,
+            preview, width=round(min_height * PREVIEW_START_ASPECT), height=min_height,
             background="#dcdcdc", highlightthickness=0,
         )
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
         self.preview_canvas.bind("<Configure>", lambda event: self._queue_redraw())
-        self.preview_caption_var = tk.StringVar()
-        ttk.Label(preview, textvariable=self.preview_caption_var).grid(
-            row=1, column=0, pady=(4, 0)
-        )
+
+        nav = ttk.Frame(preview)
+        nav.grid(row=1, column=0, pady=(4, 0))
+        self.prev_button = ttk.Button(nav, text="◀", width=3, command=lambda: self.flip_page(-1))
+        self.prev_button.pack(side="left")
+        self.page_label = ttk.Label(nav, width=16, anchor="center")
+        self.page_label.pack(side="left", padx=6)
+        self.next_button = ttk.Button(nav, text="▶", width=3, command=lambda: self.flip_page(1))
+        self.next_button.pack(side="left")
 
         for variable in (self.lot_var, self.year_var, self.month_var, self.numbers_var):
             variable.trace_add("write", self._on_input_changed)
@@ -214,7 +253,8 @@ class BarcodeTab(ttk.Frame):
 
     def _on_input_changed(self, *_):
         """Re-check the form. update the summary, the button and the preview"""
-        self.save_bar.clear()
+        if self._saving_path is None:
+            self.save_bar.clear()
         lot_number = self.lot_var.get().strip()
         errors = []  # one line per problem, in form order
         try:
@@ -226,66 +266,117 @@ class BarcodeTab(ttk.Frame):
         except ValueError as error:
             errors.append(str(error))
 
-        if errors:
-            self.barcode_texts = []
-            self.summary_label.configure(text="\n".join(errors), foreground=ERROR_COLOR)
-        else:
+        self.barcode_texts, self.request, self.page_count = [], None, 0
+        if not errors:
             year = int(self.year_var.get())
             month = self.month_box.current() + 1
-            self.barcode_texts = [
-                backend.make_barcode_text(lot_number, year, month, number)
-                for number in numbers
-            ]
-            pages = backend.split_into_pages(self.barcode_texts)
-            pairs = [pair for page in pages for pair in page]
-            singles = sum(1 for left, right in pairs if right is None)
-            groups = []
-            if len(pairs) > singles:
-                groups.append(_plural(len(pairs) - singles, "pair"))
-            if singles:  # an odd barcode left over at the end
-                groups.append("1 single")
-            summary = "%s, printed as %s on %s\n" % (
-                _plural(len(numbers), "barcode"),
-                " + ".join(groups),
-                _plural(len(pages), "page"),
+            texts = [make_barcode_text(lot_number, year, month, n) for n in numbers]
+            request = build_request(texts)
+            try:
+                self.page_count = backend.plan_pages(request)["page_count"]
+            except Exception as error:
+                errors.append("The pages could not be planned. %s" % _error_text(error))
+            else:
+                self.barcode_texts, self.request = texts, request
+
+        if errors:
+            self.summary_label.configure(text="\n".join(errors), foreground=ERROR_COLOR)
+        else:
+            summary = "%s on %s\n%s" % (
+                _plural(len(self.barcode_texts), "barcode"),
+                _plural(self.page_count, "page"),
+                self.barcode_texts[0],
             )
-            summary += self.barcode_texts[0]
-            if len(numbers) > 1:
+            if len(self.barcode_texts) > 1:
                 summary += "   to   " + self.barcode_texts[-1]
             self.summary_label.configure(text=summary, foreground=self._normal_color)
 
-        self.save_button.state(["!disabled"] if self.barcode_texts else ["disabled"])
+        self._update_save_button()
 
-        # Wait until typing pauses
+        # Stay on the same page when the range changes, clamped to the new page count
+        self.page_index = max(0, min(self.page_index, self.page_count - 1))
+        self._update_page_nav()
+        self._preview_gen += 1
         if self._preview_job is not None:
             self.after_cancel(self._preview_job)
-        self._preview_job = self.after(150, self._refresh_preview)
-
-    # Preview of the first printed page
-
-    def _refresh_preview(self):
-        """find out what page 1 holds, then draw it"""
-        self._preview_job = None
-        self._preview_image = None
-        self._preview_error = ""
-        pages = backend.split_into_pages(self.barcode_texts)
-        self._preview_pairs = pages[0] if pages else []
-
-        if pages:
-            self.preview_caption_var.set("Page 1 of %d" % len(pages))
-            try:
-                self._preview_image = backend.render_page_preview(self.barcode_texts)
-            except Exception as error:
-                self._preview_error = "The preview could not be made.\n\n%s" % error
+            self._preview_job = None
+        if self.request is None:
+            self._show_preview_message(PREVIEW_EMPTY)
         else:
-            per_page = backend.PAIRS_PER_ROW * backend.ROWS_PER_PAGE
-            self.preview_caption_var.set("US Letter, %d pairs per page" % per_page)
-        self._draw_preview()
+            self._preview_job = self.after(PREVIEW_DELAY_MS, self._start_preview)
 
-    def show_preview_image(self, image):
-        """Show a PIL image of the page instead of the drawn one"""
-        self._preview_image = image
-        self._preview_error = ""
+    def _update_save_button(self):
+        ready = self.request is not None and self._saving_path is None
+        self.save_button.state(["!disabled"] if ready else ["disabled"])
+
+    # Preview, one page at a time from backend.render_preview
+
+    def flip_page(self, step):
+        page = self.page_index + step
+        if self.request is None or not 0 <= page < self.page_count:
+            return
+        self.page_index = page
+        self._update_page_nav()
+        self.refresh_preview()
+
+    def _update_page_nav(self):
+        if self.page_count:
+            self.page_label.configure(text="Page %d of %d" % (self.page_index + 1, self.page_count))
+        else:
+            self.page_label.configure(text="")
+        has_prev = self.page_index > 0
+        has_next = self.page_index < self.page_count - 1
+        self.prev_button.state(["!disabled"] if has_prev else ["disabled"])
+        self.next_button.state(["!disabled"] if has_next else ["disabled"])
+
+    def refresh_preview(self):
+        """Render the preview now, skipping the typing delay"""
+        if self._preview_job is not None:
+            self.after_cancel(self._preview_job)
+            self._preview_job = None
+        self._preview_gen += 1
+        self._start_preview()
+
+    def _start_preview(self):
+        self._preview_job = None
+        # One render at a time, a busy render restarts itself once it sees it is outdated
+        if self.request is None or self._preview_busy:
+            return
+        self._preview_busy = True
+        render = self.preview_fn or backend.render_preview
+        self._start_worker("preview", self._preview_gen, render, self.request, self.page_index)
+
+    def _preview_done(self, gen, png, error):
+        self._preview_busy = False
+        if gen != self._preview_gen:
+            if self.request is not None and self._preview_job is None:
+                self._start_preview()
+            return
+        if error is not None:
+            self._show_preview_message(
+                "The preview could not be made.\n\n%s" % _error_text(error), ERROR_COLOR
+            )
+        elif png is None:
+            self._show_preview_message(PREVIEW_NONE)
+        else:
+            try:
+                from PIL import Image  # pip install pillow
+
+                # Full colour to keep the scaled-down page smooth
+                image = Image.open(io.BytesIO(png)).convert("RGB")
+            except Exception as error:
+                self._show_preview_message(
+                    "The preview could not be shown.\n\n%s" % _error_text(error), ERROR_COLOR
+                )
+                return
+            self._preview_image = image
+            self._preview_message = ""
+            self._draw_preview()
+
+    def _show_preview_message(self, text, color=HINT_COLOR):
+        self._preview_image = None
+        self._preview_message = text
+        self._preview_message_color = color
         self._draw_preview()
 
     def _queue_redraw(self):
@@ -304,93 +395,50 @@ class BarcodeTab(ttk.Frame):
         width = max(canvas.winfo_width(), int(canvas.cget("width")))
         height = max(canvas.winfo_height(), int(canvas.cget("height")))
 
-        if self._preview_error:
-            canvas.create_text(
-                width / 2, height / 2, text=self._preview_error, fill=ERROR_COLOR,
-                justify="center", width=width - 20,
-            )
-        elif self._preview_image is not None:
+        if self._preview_image is not None:
             from PIL import ImageTk  # pip install pillow
 
+            # Scale here instead of asking the backend again on every resize
             fitted = self._preview_image.copy()
             fitted.thumbnail((width - 12, height - 12))
             self._preview_photo = ImageTk.PhotoImage(fitted, master=canvas)
             canvas.create_image(width / 2, height / 2, image=self._preview_photo)
-        else:
-            self._draw_page(canvas, width, height)
-
-    def _draw_page(self, canvas, width, height):
-        """Draw a simplified US Letter page from the layout in backend.py"""
-        page_w, page_h = backend.PAGE_WIDTH_IN, backend.PAGE_HEIGHT_IN
-        scale = min((width - 12) / page_w, (height - 12) / page_h)  # pixels per inch
-        x0 = round((width - page_w * scale) / 2)
-        y0 = round((height - page_h * scale) / 2)
-
-        def px(x_in, y_in):
-            return x0 + round(x_in * scale), y0 + round(y_in * scale)
-
-        canvas.create_rectangle(*px(0, 0), *px(page_w, page_h), fill="white", outline="#808080")
-
-        pairs = self._preview_pairs
-        for index, (x, y, w, h) in enumerate(backend.pair_slots()):
-            left, top = px(x, y)
-            right, bottom = px(x + w, y + h)
-            used = index < len(pairs)
-            canvas.create_rectangle(
-                left, top, right, bottom, outline="#b4b4b4" if used else "#e4e4e4"
-            )
-            if not used:
-                continue
-            middle = (left + right) // 2
-            for text, (cell_left, cell_right) in zip(
-                pairs[index], ((left, middle), (middle, right))
-            ):
-                if text is not None:
-                    self._draw_barcode(canvas, text, cell_left, top, cell_right, bottom)
-
-        # Printer safe margin
-        margin = backend.PAGE_MARGIN_IN
-        canvas.create_rectangle(
-            *px(margin, margin), *px(page_w - margin, page_h - margin),
-            outline="#5b8fd1", dash=(3, 3),
-        )
-
-    def _draw_barcode(self, canvas, text, left, top, right, bottom):
-        """A stand-in barcode"""
-        cell_w, cell_h = right - left, bottom - top
-        bars_left = left + max(3, round(cell_w * 0.08))  # quiet zone
-        bars_right = right - max(3, round(cell_w * 0.08))
-        bars_top = top + max(2, round(cell_h * 0.14))
-        bars_bottom = top + round(cell_h * 0.66)
-
-        unit = max(1, (bars_right - bars_left) // 110)
-        rng = random.Random(text)
-        x = bars_left
-        while x < bars_right:
-            bar = min(unit * rng.choice((1, 1, 2, 3)), bars_right - x)
-            canvas.create_rectangle(x, bars_top, x + bar, bars_bottom, fill="black", outline="")
-            x += bar + unit * rng.choice((1, 1, 2))
-
-        # The text under the bars, or a grey line when it would be too small
-        label_y = (bars_bottom + bottom) / 2
-        font = self._font_that_fits(text, cell_w * 0.9, (bottom - bars_bottom) * 0.8)
-        if font is not None:
-            canvas.create_text((left + right) / 2, label_y, text=text, font=font)
-        else:
-            canvas.create_line(
-                left + cell_w * 0.3, label_y, right - cell_w * 0.3, label_y, fill="#909090"
+        elif self._preview_message:
+            canvas.create_text(
+                width / 2, height / 2, text=self._preview_message,
+                fill=self._preview_message_color, justify="center", width=width - 20,
             )
 
-    def _font_that_fits(self, text, max_width, max_height):
-        """Largest readable font for `text` in that space, or None"""
-        for pixels in range(min(int(max_height), 14), 6, -1):
-            font = self._fonts.get(pixels)
-            if font is None:
-                family = tkfont.nametofont("TkDefaultFont").actual("family")
-                font = self._fonts[pixels] = tkfont.Font(family=family, size=-pixels)
-            if font.measure(text) <= max_width:
-                return font
-        return None
+    # Background work
+
+    def _start_worker(self, kind, gen, fn, *args):
+        """Run fn(*args) in a thread, the result comes back through _poll"""
+        def work():
+            try:
+                result = fn(*args)
+            except Exception as error:
+                self._results.put((kind, gen, None, error))
+            else:
+                self._results.put((kind, gen, result, None))
+
+        threading.Thread(target=work, daemon=True).start()
+        if self._poll_job is None:
+            self._poll_job = self.after(POLL_MS, self._poll)
+
+    def _poll(self):
+        """Runs in the GUI thread, Tk is only touched from here"""
+        self._poll_job = None
+        try:
+            while True:
+                kind, gen, result, error = self._results.get_nowait()
+                if kind == "preview":
+                    self._preview_done(gen, result, error)
+                else:
+                    self._save_done(error)
+        except queue.Empty:
+            pass
+        if self._preview_busy or self._saving_path is not None:
+            self._poll_job = self.after(POLL_MS, self._poll)
 
     # Saving
 
@@ -402,7 +450,7 @@ class BarcodeTab(ttk.Frame):
         return name + backend.BARCODE_FILE_EXTENSION
 
     def _on_save(self):
-        if not self.barcode_texts:
+        if self.request is None or self._saving_path is not None:
             return
         extension = backend.BARCODE_FILE_EXTENSION
         path = filedialog.asksaveasfilename(
@@ -414,19 +462,32 @@ class BarcodeTab(ttk.Frame):
         )
         if not path:
             return
-        try:
-            with busy_cursor(self):
-                backend.export_barcodes(list(self.barcode_texts), path)
-        except Exception as error:
+        # Background thread to keep the window responsive during a big export
+        self._saving_path = path
+        self._update_save_button()
+        self.save_bar.show_busy("Saving...")
+        self.winfo_toplevel().configure(cursor="watch")
+        self._start_worker("save", None, backend.export_barcodes, self.request, path)
+
+    def _save_done(self, error):
+        path, self._saving_path = self._saving_path, None
+        self.winfo_toplevel().configure(cursor="")
+        self._update_save_button()
+        if error is not None:
+            self.save_bar.clear()
             show_save_error(self, error, path, what="barcode file")
-            return
-        self.mark_saved(path)
+        else:
+            self.mark_saved(path)
 
     def mark_saved(self, path):
         self.save_bar.show(path)
 
+    def is_saving(self):
+        return self._saving_path is not None
+
     def reset(self):
         today = datetime.date.today()
+        self.page_index = 0
         self.lot_var.set("")
         self.year_var.set(str(today.year))
         self.month_box.current(today.month - 1)
