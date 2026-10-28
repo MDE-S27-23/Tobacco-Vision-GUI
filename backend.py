@@ -250,6 +250,7 @@ def export_barcodes(request, path):
 
     pdf.save()
 
+
 # path = Path("/mnt/data/backend.py")
 # path.write_text(code, encoding="utf-8")
 # print(f"Created {path}")
