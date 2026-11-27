@@ -6,15 +6,21 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import backend
+import image_backend
+import label_backend
 from tab_process import DONE, FAILED, SKIPPED, WORKING
 from ui_helpers import show_save_error
 
 FAKE_FOLDER = os.path.join("C:\\", "Users", "Customer", "Documents")
 FAKE_FAILURE = "No tray was found in the photo."
 FAKE_DUPLICATE = "duplicate barcode (same as %s)"
-FAKE_LOT_NUMBER = "L1042"
-FAKE_PREVIEW_FAILURE = "The barcode font could not be loaded."
+FAKE_DESIGNATOR = "NC960"
+FAKE_PREVIEW_FAILURE = "The label font could not be loaded."
+FAKE_PRINTER = "ZDesigner ZD421-203dpi ZPL"
+FAKE_PRINT_FAILURE = (
+    'Windows could not send the labels to "%s".\n\n'
+    "Details: The printer is not available." % FAKE_PRINTER
+)
 
 
 class DebugPanel(tk.Toplevel):
@@ -29,7 +35,7 @@ class DebugPanel(tk.Toplevel):
         body.pack(fill="both", expand=True)
 
         # Tab 1
-        tab1 = ttk.LabelFrame(body, text='Tab 1 - "Image processing"', padding=8)
+        tab1 = ttk.LabelFrame(body, text='Tab 1 - "Image Processing"', padding=8)
         tab1.pack(fill="x")
         self._buttons(
             tab1,
@@ -81,21 +87,26 @@ class DebugPanel(tk.Toplevel):
         ).pack(fill="x", pady=(6, 0))
 
         # Tab 2
-        tab2 = ttk.LabelFrame(body, text='Tab 2 - "Barcode generator"', padding=8)
+        tab2 = ttk.LabelFrame(body, text='Tab 2 - "Label Printing"', padding=8)
         tab2.pack(fill="x", pady=(10, 0))
         self._buttons(
             tab2,
             [
                 ("Empty form (start)", self.t2_reset),
-                ("One number: 7", lambda: self.t2_fill("7")),
-                ("Range: 1-20", lambda: self.t2_fill("1-20")),
-                ("List with gaps: 1-5, 9, 12-14", lambda: self.t2_fill("1-5, 9, 12-14")),
-                ("Invalid input: abc", lambda: self.t2_fill("abc")),
-                ("Out of range: 0-20000", lambda: self.t2_fill("0-20000")),
-                ("Many pages: 1-500", lambda: self.t2_fill("1-500")),
-                ("Slow preview (2 s per page)", self.t2_slow_preview),
+                ("One label: Bay 1, lot 29", lambda: self.t2_fill("1", "29")),
+                ("Bays 1-2 x lots 1-5", lambda: self.t2_fill("1-2", "1-5")),
+                ("Lists with gaps: 1-3, 7 x 1-5, 9", lambda: self.t2_fill("1-3, 7", "1-5, 9")),
+                ("Invalid input: abc", lambda: self.t2_fill("abc", "1")),
+                ("Out of range: lot 0-1200", lambda: self.t2_fill("1", "0-1200")),
+                ("Bad variant: NC-960", lambda: self.t2_fill("1", "1-5", "NC-960")),
+                ("Too many: 1-999 x 1-999", lambda: self.t2_fill("1-999", "1-999")),
+                ("Long variant (16 chars)", lambda: self.t2_fill("999", "999", "ABCDEFGH12345678")),
+                ("Slow preview (2 s per label)", self.t2_slow_preview),
                 ("Preview failed", self.t2_preview_failed),
-                ("After barcodes saved", self.t2_saved),
+                ("Fake print (nothing sent, 2 s)", self.t2_fake_print),
+                ("After labels printed", self.t2_printed),
+                ("Message: print failed", self.t2_print_error),
+                ("After PDF saved", self.t2_saved),
                 ("Message: save failed", self.t2_save_error),
             ],
         )
@@ -231,7 +242,7 @@ class DebugPanel(tk.Toplevel):
             counter["n"] += 1
             time.sleep(seconds)
             if duplicate_every and counter["n"] % duplicate_every == 0:
-                raise backend.SkipPhoto(FAKE_DUPLICATE % "tray_001.jpg")
+                raise image_backend.SkipPhoto(FAKE_DUPLICATE % "tray_001.jpg")
             if fail_every and counter["n"] % fail_every == 0:
                 raise RuntimeError(FAKE_FAILURE)
             return {"note": "simulated"}
@@ -241,52 +252,74 @@ class DebugPanel(tk.Toplevel):
     # Tab 2 states
 
     def _tab2(self):
-        self.app.notebook.select(self.app.barcode_tab)
-        return self.app.barcode_tab
+        self.app.notebook.select(self.app.label_tab)
+        return self.app.label_tab
 
     def t2_reset(self):
         tab = self._tab2()
         tab.preview_fn = None
+        tab.send_fn = None
         tab.reset()
 
-    def t2_fill(self, text):
+    def t2_fill(self, bays, lots, designator=None):
         tab = self._tab2()
         tab.preview_fn = None
-        if not tab.lot_var.get().strip():
-            tab.lot_var.set(FAKE_LOT_NUMBER)
-        tab.numbers_var.set(text)
+        tab.send_fn = None
+        if designator is not None:
+            tab.designator_var.set(designator)
+        elif not tab.designator_var.get().strip():
+            tab.designator_var.set(FAKE_DESIGNATOR)
+        tab.bay_var.set(bays)
+        tab.lot_var.set(lots)
         return tab
 
     def t2_slow_preview(self):
-        def slow_render(request, page_index):
+        def slow_render(request, index, dpi):
             time.sleep(2)
-            return backend.render_preview(request, page_index)
+            return label_backend.render_preview(request, index, dpi)
 
-        tab = self.t2_fill("1-500")
+        tab = self.t2_fill("1-2", "1-50")
         tab.preview_fn = slow_render  # stays until another Tab 2 button is clicked
         tab.refresh_preview()
 
     def t2_preview_failed(self):
-        def failing_render(request, page_index):
+        def failing_render(request, index, dpi):
             raise RuntimeError(FAKE_PREVIEW_FAILURE)
 
-        tab = self.t2_fill("1-20")
+        tab = self.t2_fill("1", "1-20")
         tab.preview_fn = failing_render
         tab.refresh_preview()
 
+    def t2_fake_print(self):
+        def fake_send(labels, dpi, target):
+            time.sleep(2)
+
+        tab = self.t2_fill("1-2", "1-5")
+        tab.send_fn = fake_send  # stays until another Tab 2 button is clicked
+        tab._on_print()
+
+    def t2_printed(self):
+        tab = self.t2_fill("1-2", "1-5")
+        tab.mark_printed(len(tab.labels), FAKE_PRINTER)
+
+    def t2_print_error(self):
+        self.t2_fill("1-2", "1-5")
+        messagebox.showerror(
+            "Could not print", FAKE_PRINT_FAILURE, parent=self.app.label_tab
+        )
+
     def t2_saved(self):
-        tab = self.t2_fill("1-20")
+        tab = self.t2_fill("1-2", "1-5")
         tab.mark_saved(os.path.join(FAKE_FOLDER, tab._default_file_name()))
 
     def t2_save_error(self):
-        tab = self.t2_fill("1-20")
+        tab = self.t2_fill("1-2", "1-5")
         show_save_error(
             tab,
             OSError("There is not enough space on the disk."),
             os.path.join(FAKE_FOLDER, tab._default_file_name()),
-            what="barcode file",
+            what="PDF file",
         )
-
 
     def unexpected_error(self):
         raise RuntimeError("Simulated bug from the debug panel")

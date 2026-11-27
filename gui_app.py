@@ -7,7 +7,7 @@ import traceback
 from tkinter import messagebox, ttk
 
 from debug_panel import DebugPanel
-from tab_barcode import BarcodeTab
+from tab_labels import LabelTab
 from tab_process import ProcessTab
 
 WINDOW_TITLE = "tobacco vision GUI test"
@@ -42,9 +42,9 @@ class App:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.process_tab = ProcessTab(self.notebook, self)
-        self.barcode_tab = BarcodeTab(self.notebook, self)
-        self.notebook.add(self.process_tab, text="  Image processing  ")
-        self.notebook.add(self.barcode_tab, text="  Barcode generator  ")
+        self.label_tab = LabelTab(self.notebook, self)
+        self.notebook.add(self.process_tab, text="  Image Processing  ")
+        self.notebook.add(self.label_tab, text="  Label Printing  ")
 
         bottom = ttk.Frame(self.root)
         bottom.pack(fill="x", padx=8, pady=4)
@@ -121,10 +121,16 @@ class App:
                 "Still working",
                 "Photos are still being processed.\n\nClose the program anyway?",
             )
-        elif self.barcode_tab.is_saving():
+        elif self.label_tab.is_busy() == "print":
+            question = (
+                "Still printing",
+                "The labels are still being sent to the printer.\n\n"
+                "Close the program anyway?",
+            )
+        elif self.label_tab.is_busy() == "pdf":
             question = (
                 "Still saving",
-                "The barcode file is still being saved.\n\nClose the program anyway?",
+                "The label PDF is still being saved.\n\nClose the program anyway?",
             )
         elif self.process_tab.has_unsaved_results():
             question = (

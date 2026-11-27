@@ -27,6 +27,18 @@ jobs:
       - name: Build
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name TobaccoVisionGUI --collect-all tkinterdnd2 main.py
 
+      # Start the finished exe with Python hidden from it, as on the customer's PC
+      # Fails the build when something the program needs did not make it into the exe
+      - name: Self-test the exe
+        shell: pwsh
+        run: |
+          $env:Path = "C:\Windows\System32;C:\Windows"
+          Remove-Item Env:PYTHONHOME, Env:PYTHONPATH -ErrorAction SilentlyContinue
+          $result = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $run = Start-Process dist\TobaccoVisionGUI.exe -ArgumentList "--self-test", "`"$result`"" -Wait -PassThru
+          if (Test-Path $result) { Get-Content $result } else { Write-Output "No result file was written." }
+          if ($run.ExitCode -ne 0) { Write-Error "Self-test failed (exit code $($run.ExitCode))"; exit 1 }
+
       # Test builds
       - name: Keep the exe from a test build
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}

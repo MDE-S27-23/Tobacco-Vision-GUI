@@ -9,7 +9,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
-import backend
+import image_backend
 from ui_helpers import (
     SaveBar,
     WrappingLabel,
@@ -376,9 +376,9 @@ class ProcessTab(ttk.Frame):
         if self.state != self.READY:
             return
         if process_fn is None:
-            process_fn = backend.process_image
+            process_fn = image_backend.process_image
             try:
-                backend.start_batch()
+                image_backend.start_batch()
             except Exception as error:
                 messagebox.showerror(
                     "Could not start",
@@ -419,7 +419,7 @@ class ProcessTab(ttk.Frame):
             self._queue.put((run_id, "started", index, None))
             try:
                 data = process_fn(path)
-            except backend.SkipPhoto as skip:
+            except image_backend.SkipPhoto as skip:
                 self._queue.put((run_id, "skipped", index, str(skip) or "skipped"))
             except Exception as error:  # one bad photo does not stop the batch
                 message = str(error) or error.__class__.__name__
@@ -551,7 +551,7 @@ class ProcessTab(ttk.Frame):
             return
         try:
             with busy_cursor(self):
-                backend.export_results_to_excel(self.results, path)
+                image_backend.export_results_to_excel(self.results, path)
         except Exception as error:
             show_save_error(self, error, path, what="Excel file")
             return

@@ -1,4 +1,10 @@
-tkinterdnd2    # drag and drop of photos onto the window (GUI works without it, minus drag and drop)
-openpyxl       # placeholder Excel export in backend.py
-pillow         # barcode preview picture + placeholder barcode PDF in backend.py
-pyinstaller    # only needed to build the .exe
+# Everything the program imports MUST be listed here. The .exe only contains what is
+# installed when it is built, and the build checks the finished .exe with --self-test.
+# Exact versions so every build is the same.
+pillow==13.0.0          # drawing the labels, preview, PDF
+qrcode==8.2             # QR codes (backend.py)
+reportlab==5.1.2        # PDF export (backend.py)
+pywin32==312; sys_platform == "win32"   # sending labels to a printer installed in Windows
+openpyxl==3.1.5         # Tab 1 Excel export
+tkinterdnd2==0.7.0      # drag and drop of photos (the GUI works without it, minus drag and drop)
+pyinstaller==6.22.3     # only needed to build the .exe
