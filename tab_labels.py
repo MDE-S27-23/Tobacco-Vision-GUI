@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import app_settings
 import label_backend
+import theme
 import zebra_printer
 from ui_helpers import SaveBar, WrappingLabel, show_save_error
 
@@ -45,8 +46,8 @@ ERROR_NO_DESIGNATOR = "Missing variant."
 ERROR_DESIGNATOR = "The variant can only use letters and digits (no spaces or '-')."
 ERROR_DESIGNATOR_LONG = "The variant can be at most %d characters long." % MAX_DESIGNATOR_LENGTH
 ERROR_TOO_MANY = "That is %d labels. Please make at most " + "%d at a time." % MAX_LABELS
-ERROR_COLOR = "#b00020"
-HINT_COLOR = "#606060"
+ERROR_COLOR = "error"   # theme.py color names, they change in dark mode
+HINT_COLOR = "hint"
 
 PREVIEW_EMPTY = "The labels will show up here."
 PREVIEW_NONE = "No preview available."
@@ -209,7 +210,7 @@ class LabelTab(ttk.Frame):
             )
             entry = ttk.Entry(form, textvariable=variable, width=20)
             entry.grid(row=row, column=1, sticky="ew", pady=(3, 0))
-            ttk.Label(form, text=hint, foreground=HINT_COLOR).grid(
+            ttk.Label(form, text=hint, style="Hint.TLabel").grid(
                 row=row + 1, column=1, sticky="w", pady=(0, 3)
             )
             return entry
@@ -225,7 +226,6 @@ class LabelTab(ttk.Frame):
         left.rowconfigure(1, minsize=2 * line_height + 10)
         self.summary_label = WrappingLabel(left, text="", width=1, wraplength=LEFT_WRAP)
         self.summary_label.grid(row=1, column=0, sticky="new", pady=(8, 0))
-        self._normal_color = str(self.summary_label.cget("foreground"))
 
         printer = ttk.LabelFrame(left, text="Printer", padding=8)
         printer.grid(row=2, column=0, sticky="ew", pady=(8, 0))
@@ -258,11 +258,6 @@ class LabelTab(ttk.Frame):
             values=[_dpi_text(dpi) for dpi in label_backend.DPI_CHOICES],
         )
         self.dpi_box.grid(row=2, column=1, sticky="w", pady=(6, 0))
-        WrappingLabel(
-            printer,
-            text="If unsure, check the sticker on the bottom of the printer.",
-            foreground=HINT_COLOR, width=1, wraplength=LEFT_WRAP,
-        ).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(2, 0))
 
         self.action_bar = SaveBar(left, message_lines=3, wraplength=LEFT_WRAP)
         self.action_bar.grid(row=3, column=0, sticky="ew", pady=(10, 0))
@@ -285,8 +280,9 @@ class LabelTab(ttk.Frame):
         aspect = label_backend.LABEL_WIDTH_IN / label_backend.LABEL_HEIGHT_IN
         self.preview_canvas = tk.Canvas(
             preview, width=round(min_height * aspect), height=min_height,
-            background="#dcdcdc", highlightthickness=0,
+            highlightthickness=0,
         )
+        theme.on_change(self._paint_preview_box)
         self.preview_canvas.grid(row=0, column=0, sticky="nsew")
         self.preview_canvas.bind("<Configure>", lambda event: self._queue_redraw())
 
@@ -372,7 +368,7 @@ class LabelTab(ttk.Frame):
         self.labels = [] if errors else build_labels(bays, designator, lots)
 
         if errors:
-            self.summary_label.configure(text="\n".join(errors), foreground=ERROR_COLOR)
+            self.summary_label.configure(text="\n".join(errors), style="Error.TLabel")
         else:
             summary = _plural(len(self.labels), "label")
             if len(bays) > 1:
@@ -380,7 +376,7 @@ class LabelTab(ttk.Frame):
             summary += "\n" + label_text(self.labels[0])
             if len(self.labels) > 1:
                 summary += "   to   " + label_text(self.labels[-1])
-            self.summary_label.configure(text=summary, foreground=self._normal_color)
+            self.summary_label.configure(text=summary, style="TLabel")
 
         self._update_buttons()
 
@@ -482,6 +478,10 @@ class LabelTab(ttk.Frame):
         self._preview_message_color = color
         self._draw_preview()
 
+    def _paint_preview_box(self):
+        self.preview_canvas.configure(background=theme.color("preview"))
+        self._draw_preview()
+
     def _queue_redraw(self):
         """The preview box changed size, redraw once things settle"""
         if self._redraw_job is not None:
@@ -520,7 +520,8 @@ class LabelTab(ttk.Frame):
         elif self._preview_message:
             canvas.create_text(
                 width / 2, height / 2, text=self._preview_message,
-                fill=self._preview_message_color, justify="center", width=width - 20,
+                fill=theme.color(self._preview_message_color), justify="center",
+                width=width - 20,
             )
 
     # Background work

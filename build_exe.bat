@@ -5,6 +5,7 @@ cd /d "%~dp0"
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name "TobaccoVisionGUI" ^
     --collect-all tkinterdnd2 ^
+    --paths vision ^
     main.py
 if errorlevel 1 goto failed
 

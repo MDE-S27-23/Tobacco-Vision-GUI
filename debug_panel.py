@@ -2,19 +2,24 @@
 Opened with the "Debug" checkbox in the bottom-right corner of the main window"""
 
 import os
+import random
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 import image_backend
 import label_backend
+import theme
 from tab_process import DONE, FAILED, SKIPPED, WORKING
 from ui_helpers import show_save_error
 
 FAKE_FOLDER = os.path.join("C:\\", "Users", "Customer", "Documents")
-FAKE_FAILURE = "No tray was found in the photo."
-FAKE_DUPLICATE = "duplicate barcode (same as %s)"
+FAKE_FAILURE = "tray not found"
+FAKE_DUPLICATE = "retaken in %s"
 FAKE_DESIGNATOR = "NC960"
+# Warnings the real image processing can give, for "Random warning every Nth"
+FAKE_WARNINGS = ("no label on the right half", "no label found", "only 12 x 23 cells found",
+                 "2 labels on the left half", "unknown label")
 FAKE_PREVIEW_FAILURE = "The label font could not be loaded."
 FAKE_PRINTER = "ZDesigner ZD421-203dpi ZPL"
 FAKE_PRINT_FAILURE = (
@@ -28,6 +33,7 @@ class DebugPanel(tk.Toplevel):
         super().__init__(app.root)
         self.app = app
         self.title("Debug panel")
+        theme.style_window(self)
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", app.close_debug_panel)
 
@@ -82,6 +88,13 @@ class DebugPanel(tk.Toplevel):
         ttk.Spinbox(
             simulate, from_=0, to=100, width=5, textvariable=self.duplicate_every
         ).grid(row=1, column=5, padx=(4, 0), pady=(4, 0))
+        self.warning_every = tk.IntVar(value=0)
+        ttk.Label(simulate, text="Random warning every Nth (0 = never):").grid(
+            row=2, column=0, columnspan=5, sticky="e", pady=(4, 0)
+        )
+        ttk.Spinbox(
+            simulate, from_=0, to=100, width=5, textvariable=self.warning_every
+        ).grid(row=2, column=5, padx=(4, 0), pady=(4, 0))
         ttk.Button(
             tab1, text="Run a simulated batch (animated)", command=self.t1_simulate
         ).pack(fill="x", pady=(6, 0))
@@ -115,6 +128,15 @@ class DebugPanel(tk.Toplevel):
         general = ttk.LabelFrame(body, text="General", padding=8)
         general.pack(fill="x", pady=(10, 0))
         self._buttons(general, [("Message: unexpected error", self.unexpected_error)])
+        themes = ttk.Frame(general)
+        themes.pack(fill="x", pady=(8, 0))
+        ttk.Label(themes, text="Theme:").pack(side="left", padx=(0, 10))
+        self.theme_var = tk.StringVar(value=theme.mode())
+        for text, value in (("Follow Windows", "system"), ("Light", "light"), ("Dark", "dark")):
+            ttk.Radiobutton(
+                themes, text=text, value=value, variable=self.theme_var,
+                command=lambda: theme.set_mode(self.theme_var.get()),
+            ).pack(side="left", padx=(0, 12))
         if app.dnd_available:
             dnd_text = "Drag and drop: available"
         else:
@@ -230,6 +252,7 @@ class DebugPanel(tk.Toplevel):
             seconds = max(0.0, float(self.seconds_per_photo.get()))
             fail_every = max(0, int(self.fail_every.get()))
             duplicate_every = max(0, int(self.duplicate_every.get()))
+            warning_every = max(0, int(self.warning_every.get()))
         except (tk.TclError, ValueError):
             messagebox.showwarning(
                 "Debug", "The simulation settings must be numbers.", parent=self
@@ -245,7 +268,10 @@ class DebugPanel(tk.Toplevel):
                 raise image_backend.SkipPhoto(FAKE_DUPLICATE % "tray_001.jpg")
             if fail_every and counter["n"] % fail_every == 0:
                 raise RuntimeError(FAKE_FAILURE)
-            return {"note": "simulated"}
+            warning = None
+            if warning_every and counter["n"] % warning_every == 0:
+                warning = random.choice(FAKE_WARNINGS)
+            return _fake_tray(path, counter["n"], warning)
 
         tab.start_processing(process_fn=fake_process_image)
 
@@ -323,3 +349,56 @@ class DebugPanel(tk.Toplevel):
 
     def unexpected_error(self):
         raise RuntimeError("Simulated bug from the debug panel")
+
+
+def _fake_tray(path, number, warning=None):
+    """What image_backend.process_image returns for a whole 12 x 24 tray with random
+    seedlings, two lots with labels, and `warning` if given (the labels follow it, like
+    the real thing). Complete enough for the status text and the Excel file."""
+    rows, columns = 12, 24
+    first, second = ("Bay1-%s-%d" % (FAKE_DESIGNATOR, 2 * number - lot) for lot in (1, 0))
+    if warning == "no label on the right half":
+        second = None
+    elif warning == "no label found":
+        first = second = None
+    elif warning == "2 labels on the left half":
+        warning = "2 labels on the left half: %s, %s; no label on the right half" % (
+            first, second)
+        first = second = None
+    elif warning and warning.startswith("only"):
+        columns = 23
+    elif warning == "unknown label":   # a misread, the variant's 0 read as O
+        first = first.replace("0", "O", 1)
+        warning = 'unknown label "%s"' % first
+    complete = columns == 24
+    sections = image_backend._sections(rows, columns, complete)
+    labels = (first, second) if complete else (first,)
+    for section, label in zip(sections, labels):
+        section["label"] = label
+        match = image_backend._LABEL_TEXT.match(label or "")
+        if match:
+            section.update(bay=int(match.group(1)), variant=match.group(2),
+                           lot=int(match.group(3)))
+        elif warning:
+            section["warnings"].append(warning)
+
+    rng = random.Random(number)
+    cells = []
+    for row in range(rows):
+        for column in range(columns):
+            seedling = rng.random() < 0.85
+            cells.append({
+                "row": row + 1, "column": column + 1,
+                "name": "%s%d" % (chr(ord("A") + row), column + 1),
+                "section": image_backend._section_of(sections, row, column),
+                "status": image_backend.SEEDLING if seedling else image_backend.EMPTY,
+                "area": max(5.0, rng.gauss(120, 35)) if seedling else 0.0,
+                "leaves": rng.randint(1, 3) if seedling else 0,
+                "color": (rng.randint(40, 70), rng.randint(120, 170), rng.randint(60, 100))
+                if seedling else None,
+                "quality": "",
+            })
+    return {"file": os.path.basename(path), "path": path, "taken": None, "rows": rows,
+            "columns": columns, "complete": complete, "sections": sections, "cells": cells,
+            "warnings": [warning] if warning else [], "pitch_in_from_qr": None,
+            "check_image": None}

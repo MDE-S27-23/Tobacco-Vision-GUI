@@ -25,7 +25,7 @@ jobs:
 
       # Same command as build_exe.bat
       - name: Build
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name TobaccoVisionGUI --collect-all tkinterdnd2 main.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name TobaccoVisionGUI --collect-all tkinterdnd2 --paths vision main.py
 
       # Start the finished exe with Python hidden from it, as on the customer's PC
       # Fails the build when something the program needs did not make it into the exe

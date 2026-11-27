@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Written by test_photos/check_test_photos.py
+test_photos/test_photos_report.xlsx
+test_photos/check_test_photos.py
+test_photos/make_test_photos.py
+test_photos/README.md

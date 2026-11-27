@@ -6,6 +6,8 @@ import tkinter.font as tkfont
 import traceback
 from tkinter import messagebox, ttk
 
+import image_backend
+import theme
 from debug_panel import DebugPanel
 from tab_labels import LabelTab
 from tab_process import ProcessTab
@@ -38,6 +40,7 @@ class App:
         self.root.report_callback_exception = self._on_unexpected_error
         self.dnd_available, self.dnd_problem = _load_drag_and_drop(self.root)
         self._setup_fonts()
+        theme.start(self.root, style_extras=self._list_row_height)
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=8, pady=(8, 0))
@@ -60,6 +63,7 @@ class App:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._set_window_size()
+        theme.on_change(self._fit_window)  # dark mode's widgets are a little bigger
 
     def run(self):
         self.root.mainloop()
@@ -75,6 +79,18 @@ class App:
         extra_rows = max(0, min(6, room // row_height))
         root.geometry("%dx%d" % (width, height + extra_rows * row_height))
 
+    def _fit_window(self):
+        """After switching light/dark: still show everything"""
+        root = self.root
+        if not root.winfo_ismapped():
+            return
+        root.update_idletasks()
+        width, height = root.winfo_reqwidth(), root.winfo_reqheight()
+        root.minsize(width, height)
+        if root.winfo_width() < width or root.winfo_height() < height:
+            root.geometry("%dx%d" % (max(width, root.winfo_width()),
+                                     max(height, root.winfo_height())))
+
 
     def _setup_fonts(self):
         default_font = tkfont.nametofont("TkDefaultFont")
@@ -82,10 +98,12 @@ class App:
             for name in ("TkDefaultFont", "TkTextFont", "TkHeadingFont"):
                 tkfont.nametofont(name).configure(size=BASE_FONT_SIZE)
             self.root.option_add("*TCombobox*Listbox.font", default_font)
-        # List rows do not grow with the font by themselves
-        ttk.Style(self.root).configure(
-            "Treeview", rowheight=default_font.metrics("linespace") + 6
-        )
+
+    @staticmethod
+    def _list_row_height(style):
+        """List rows do not grow with the font by themselves (set again for each theme)"""
+        line_height = tkfont.nametofont("TkDefaultFont").metrics("linespace")
+        style.configure("Treeview", rowheight=line_height + 6)
 
     def register_file_drop(self, widget, on_drop, on_enter=None, on_leave=None):
         """Let files from Windows Explorer be dropped onto `widget`"""
@@ -142,6 +160,7 @@ class App:
             question[0], question[1], icon="warning", default="no", parent=self.root
         ):
             return
+        image_backend.cleanup()  # delete the check pictures
         self.root.destroy()
 
     def _on_unexpected_error(self, error_type, error, trace):

@@ -8,6 +8,8 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox, ttk
 
+import theme
+
 
 class WrappingLabel(ttk.Label):
     """A label whose text re-wraps to fit when the window is resized. `wraplength` is the starting value"""
@@ -29,19 +31,16 @@ class WrappingLabel(ttk.Label):
 
 def faint_box(parent, padding=8):
     """A group box without a title"""
-    red, green, blue = (value // 256 for value in parent.winfo_rgb(
-        ttk.Style(parent).lookup("TFrame", "background") or "SystemButtonFace"
-    ))
-    outline = "#%02x%02x%02x" % (int(red * 0.84), int(green * 0.84), int(blue * 0.84))
-    return tk.Frame(
-        parent,
-        padx=padding,
-        pady=padding,
-        background="#%02x%02x%02x" % (red, green, blue),
-        highlightthickness=1,
-        highlightbackground=outline,
-        highlightcolor=outline,
-    )
+    box = tk.Frame(parent, padx=padding, pady=padding, highlightthickness=1)
+
+    def paint():
+        background = theme.color("window")
+        outline = theme.outline_for(background)
+        box.configure(background=background, highlightbackground=outline,
+                      highlightcolor=outline)
+
+    theme.on_change(paint)
+    return box
 
 
 @contextlib.contextmanager

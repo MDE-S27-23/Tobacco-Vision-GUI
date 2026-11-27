@@ -1,4 +1,10 @@
-"""Tab 1 add tray photos, process them one by one, save an Excel file"""
+"""Tab 1 add tray photos, process them one by one, save an Excel file
+
+The status of a photo shows the labels read on it. Photos with something to check are
+shown in orange (or red when they failed); double-clicking them opens a marked-up copy
+that shows the problem. A lot photographed again later (a retake) makes the older photo
+"Skipped", and it is left out of the Excel file.
+"""
 
 import datetime
 import os
@@ -10,6 +16,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 import image_backend
+import theme
 from ui_helpers import (
     SaveBar,
     WrappingLabel,
@@ -100,8 +107,7 @@ class ProcessTab(ttk.Frame):
         self.tree.column("number", width=5 * char_width, stretch=False, anchor="e")
         self.tree.column("filename", width=24 * char_width, anchor="w")
         self.tree.column("status", width=46 * char_width, anchor="w")
-        self.tree.tag_configure("failed", foreground="#b00020")
-        self.tree.tag_configure("skipped", foreground="#8a5a00")
+        theme.on_change(self._paint_list)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(
             list_frame, orient="vertical", command=self.tree.yview
@@ -206,6 +212,10 @@ class ProcessTab(ttk.Frame):
 
     # Step 1, the photo list
 
+    def _paint_list(self):
+        for tag in ("failed", "warning", "skipped"):
+            self.tree.tag_configure(tag, foreground=theme.color(tag))
+
     def _refresh_list(self):
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.items):
@@ -220,15 +230,20 @@ class ProcessTab(ttk.Frame):
         return (index + 1, os.path.basename(item["path"]), status)
 
     def _apply_row_tag(self, index):
-        tag = {FAILED: "failed", SKIPPED: "skipped"}.get(self.items[index]["status"])
+        item = self.items[index]
+        tag = {FAILED: "failed", SKIPPED: "skipped"}.get(item["status"])
+        if tag is None and item.get("warning"):
+            tag = "warning"
         self.tree.item(str(index), tags=(tag,) if tag else ())
 
-    def _set_item_status(self, index, status, detail=""):
+    def _set_item_status(self, index, status, detail="", warning=False, scroll=True):
         self.items[index]["status"] = status
         self.items[index]["detail"] = detail
+        self.items[index]["warning"] = warning
         self.tree.item(str(index), values=self._row(index))
         self._apply_row_tag(index)
-        self.tree.see(str(index))
+        if scroll:
+            self.tree.see(str(index))
 
     def add_paths(self, paths, check_exists=True):
         """Add photos (or folders of photos) to the list
@@ -330,11 +345,17 @@ class ProcessTab(ttk.Frame):
         return event.action
 
     def _on_double_click(self, event):
-        """Open the double-clicked photo in the user's own image viewer."""
+        """Open the double-clicked photo in the user's own image viewer. For a photo
+        with something to check, open the marked-up copy that shows the problem"""
         row = self.tree.identify_row(event.y)
         if not row:
             return  # the header or the empty space below the last row
-        path = self.items[int(row)]["path"]
+        item = self.items[int(row)]
+        check = item.get("check")
+        if check and os.path.isfile(check) and (item.get("warning") or item["status"] == FAILED):
+            open_file(check)
+            return
+        path = item["path"]
         if not os.path.isfile(path):
             messagebox.showwarning(
                 "Photo not found",
@@ -365,6 +386,7 @@ class ProcessTab(ttk.Frame):
         self.items = []
         self.results = []
         self.results_saved = False
+        image_backend.cleanup()  # the check pictures
         self._refresh_list()
         self.save_bar.clear()
         self._set_state(self.EMPTY)
@@ -391,9 +413,8 @@ class ProcessTab(ttk.Frame):
         self.results = []
         self.results_saved = False
         self.save_bar.clear()
-        for index in range(len(self.items)):
-            self.items[index]["status"] = WAITING
-            self.items[index]["detail"] = ""
+        for item in self.items:
+            item.update(status=WAITING, detail="", warning=False, check=None)
         self._refresh_list()
 
         self._run_id += 1
@@ -423,7 +444,8 @@ class ProcessTab(ttk.Frame):
                 self._queue.put((run_id, "skipped", index, str(skip) or "skipped"))
             except Exception as error:  # one bad photo does not stop the batch
                 message = str(error) or error.__class__.__name__
-                self._queue.put((run_id, "failed", index, message))
+                check = getattr(error, "check_image", None)
+                self._queue.put((run_id, "failed", index, (message, check)))
             else:
                 self._queue.put((run_id, "done", index, data))
         self._queue.put((run_id, "finished", None, None))
@@ -445,7 +467,8 @@ class ProcessTab(ttk.Frame):
                 elif kind == "skipped":
                     self.record_result(index, SKIPPED, message=payload)
                 elif kind == "failed":
-                    self.record_result(index, FAILED, message=payload)
+                    message, check = payload
+                    self.record_result(index, FAILED, message=message, check=check)
                 elif kind == "finished":
                     self.finish()
                     return
@@ -457,10 +480,11 @@ class ProcessTab(ttk.Frame):
         if self.state == self.RUNNING:
             self.after(50, self._poll)
 
-    def record_result(self, index, status, data=None, message=None):
+    def record_result(self, index, status, data=None, message=None, check=None):
         """Store the outcome of one photo"""
         self.results.append(
             {
+                "index": index,
                 "image_path": self.items[index]["path"],
                 "ok": status == DONE,
                 "skipped": status == SKIPPED,
@@ -468,8 +492,29 @@ class ProcessTab(ttk.Frame):
                 "error": message,
             }
         )
-        self._set_item_status(index, status, message or "")
+        if isinstance(data, dict):
+            check = data.get("check_image") or check
+        self.items[index]["check"] = check
+        if status == DONE:
+            self._show_results()
+            self.tree.see(str(index))
+        else:
+            self._set_item_status(index, status, message or "", warning=bool(check))
         self.progress.configure(value=len(self.results))
+
+    def _show_results(self):
+        """Status text of every processed photo. A later photo can turn an earlier one
+        into a retake, so all of them are looked at again"""
+        retaken = image_backend.find_retakes(self.results)
+        for position, result in enumerate(self.results):
+            if not result["ok"]:
+                continue
+            kind, text = image_backend.describe(result["data"], retaken.get(position))
+            status = SKIPPED if kind == "skipped" else DONE
+            item = self.items[result["index"]]
+            row = (status, text, kind == "warning")
+            if (item["status"], item["detail"], item.get("warning")) != row:
+                self._set_item_status(result["index"], *row, scroll=False)
 
     def show_progress(self, done, total, current_path):
         self.progress.configure(maximum=max(total, 1), value=done)
@@ -485,30 +530,29 @@ class ProcessTab(ttk.Frame):
 
     def finish(self):
         total = len(self.items)
-        succeeded = sum(1 for result in self.results if result["ok"])
-        skipped = sum(1 for result in self.results if result["skipped"])
-        failed = len(self.results) - succeeded - skipped
+        skipped = sum(1 for item in self.items if item["status"] == SKIPPED)
+        failed = sum(1 for item in self.items if item["status"] == FAILED)
+        succeeded = total - skipped - failed
+        to_check = sum(1 for item in self.items if item.get("warning") and item["status"] == DONE)
         self.progress.configure(maximum=max(total, 1), value=total)
 
-        check_hint = "Double-click a file in the list to open the photo and check it."
-        if succeeded == total:
-            text = 'Finished. All %d photos were processed. Now click "Save Excel file...".' % total
-            if total == 1:
-                text = 'Finished. The photo was processed. Now click "Save Excel file...".'
+        photos = "%d photo%s" % (total, "" if total == 1 else "s")
+        problems = []
+        if to_check:
+            problems.append("%d to check" % to_check)
+        if skipped:
+            problems.append("%d skipped" % skipped)
+        if failed:
+            problems.append("%d failed" % failed)
+        if not problems:
+            text = 'Done, %s processed. Click "Save Excel file..." to save the results.' % photos
+        elif succeeded:
+            text = "Done, %s processed: %s." % (photos, ", ".join(problems))
         else:
-            problems = []
-            if skipped:
-                problems.append("%d skipped" % skipped)
-            if failed:
-                problems.append("%d failed" % failed)
-            if succeeded:
-                text = "Finished. %d of %d photos were processed (%s). %s" % (
-                    succeeded, total, ", ".join(problems), check_hint,
-                )
-            else:
-                text = "Finished, but none of the photos were processed (%s). %s" % (
-                    ", ".join(problems), check_hint,
-                )
+            none = "the photo could not" if total == 1 else "none of the %s could" % photos
+            text = "Done, but %s be used: %s." % (none, ", ".join(problems))
+        if to_check or failed:
+            text += "\nDouble-click a filename in orange or red to see what went wrong."
         self.status_var.set(text)
         self._worker = None
         self._set_state(self.FINISHED)
@@ -526,8 +570,8 @@ class ProcessTab(ttk.Frame):
         self._cancel = threading.Event()
         self.results = []
         for item in self.items:
-            item["status"] = WAITING
-            item["detail"] = ""
+            item.update(status=WAITING, detail="", warning=False, check=None)
+        image_backend.cleanup()
         self._refresh_list()
         self._set_state(
             self.READY,

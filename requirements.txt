@@ -6,5 +6,8 @@ qrcode==8.2             # QR codes (backend.py)
 reportlab==5.1.2        # PDF export (backend.py)
 pywin32==312; sys_platform == "win32"   # sending labels to a printer installed in Windows
 openpyxl==3.1.5         # Tab 1 Excel export
+opencv-python-headless==5.1.0.95   # Tab 1 tray and seedling analysis (vision/)
+numpy==2.5.5            # Tab 1, used by OpenCV
+zxing-cpp==3.2.0.post1  # Tab 1 reading the QR labels in the photos
 tkinterdnd2==0.7.0      # drag and drop of photos (the GUI works without it, minus drag and drop)
 pyinstaller==6.22.3     # only needed to build the .exe

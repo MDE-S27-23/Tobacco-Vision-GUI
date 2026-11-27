@@ -33,11 +33,15 @@ def self_test(result_path):
     try:
         import openpyxl  # noqa: F401  Tab 1 Excel export
         import gui_app
+        import image_backend
         import label_backend
         import zebra_printer
 
         label_backend.self_test()
         lines.append("labels: OK")
+
+        image_backend.self_test()   # OpenCV, zxing-cpp and vision/ on a drawn tray
+        lines.append("tray photos: OK")
 
         with tempfile.TemporaryDirectory() as folder:
             request = {"barcodes": [
